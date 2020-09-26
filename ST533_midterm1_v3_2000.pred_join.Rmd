@@ -1,0 +1,1325 @@
+---
+title: "ST 533 Midterm 1"
+author: Tyler Schappe
+date: 9/19/2020
+output: 
+  html_notebook:
+    code_folding: hide
+---
+
+```{r}
+library(ggplot2); library(geoR); library(spBayes); library(fields);library(ggspatial); library(sf); library(lwgeom); library(ggrepel); library(cowplot); library(reshape2); library(tidybayes); library(HDInterval); library(viridis)
+library(rnaturalearth); library(rnaturalearthdata); library(googleway)
+library(rgeos)
+library(maps)
+
+citation("reshape2")
+```
+
+### Get the data in order
+
+Load the raw data
+```{r}
+fl.20 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/fl_20.csv")
+ga.20 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/ga_20.csv")
+nc.20 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/nc_20.csv")
+sc.20 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/sc_20.csv")
+va.20 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/va_20.csv")
+fl.19 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/fl_19.csv")
+ga.19 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/ga_19.csv")
+nc.19 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/nc_19.csv")
+sc.19 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/sc_19.csv")
+va.19 <- read.csv("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/data/va_19.csv")
+```
+
+Add an identifier column to each one and then combine them and extract just April-June
+```{r}
+#Add a year column by stripping the date column
+fl.20$year <- gsub('[0-9]+\\/[0-9]+\\/', '', fl.20$Date)
+fl.19$year <- gsub('[0-9]+\\/[0-9]+\\/', '', fl.19$Date)
+ga.20$year <- gsub('[0-9]+\\/[0-9]+\\/', '', ga.20$Date)
+ga.19$year <- gsub('[0-9]+\\/[0-9]+\\/', '', ga.19$Date)
+nc.20$year <- gsub('[0-9]+\\/[0-9]+\\/', '', nc.20$Date)
+nc.19$year <- gsub('[0-9]+\\/[0-9]+\\/', '', nc.19$Date)
+sc.20$year <- gsub('[0-9]+\\/[0-9]+\\/', '', sc.20$Date)
+sc.19$year <- gsub('[0-9]+\\/[0-9]+\\/', '', sc.19$Date)
+va.20$year <- gsub('[0-9]+\\/[0-9]+\\/', '', va.20$Date)
+va.19$year <- gsub('[0-9]+\\/[0-9]+\\/', '', va.19$Date)
+#Convert the date text column to a recognized date format
+fl.20$Date2 <- as.Date(fl.20$Date, format = "%m/%d/%y%y")
+fl.19$Date2 <- as.Date(fl.19$Date, format = "%m/%d/%y%y")
+ga.20$Date2 <- as.Date(ga.20$Date, format = "%m/%d/%y%y")
+ga.19$Date2 <- as.Date(ga.19$Date, format = "%m/%d/%y%y")
+nc.20$Date2 <- as.Date(nc.20$Date, format = "%m/%d/%y%y")
+nc.19$Date2 <- as.Date(nc.19$Date, format = "%m/%d/%y%y")
+sc.20$Date2 <- as.Date(sc.20$Date, format = "%m/%d/%y%y")
+sc.19$Date2 <- as.Date(sc.19$Date, format = "%m/%d/%y%y")
+va.20$Date2 <- as.Date(va.20$Date, format = "%m/%d/%y%y")
+va.19$Date2 <- as.Date(va.19$Date, format = "%m/%d/%y%y")
+#Combine them together
+dat.20 <- rbind(
+  fl.20, ga.20, nc.20, sc.20, va.20
+)
+dat.19 <- rbind(
+  fl.19, ga.19, nc.19, sc.19, va.19
+)
+#Extract just April - June
+dat.20.aj <- dat.20[dat.20$Date2 >= "2020-04-01" & dat.20$Date2 <= "2020-06-30",]
+dat.19.aj <- dat.19[dat.19$Date2 >= "2019-04-01" & dat.19$Date2 <= "2019-06-30",]
+
+#Keep only sites that are present in both datasets
+sites.20 <- unique(dat.20.aj$Site.ID)
+sites.19 <- unique(dat.19.aj$Site.ID)
+dat.20.aj.site <- dat.20.aj[dat.20.aj$Site.ID %in% sites.19, ]
+dat.19.aj.site <- dat.19.aj[dat.19.aj$Site.ID %in% sites.20, ]
+#Check if the sites are the same
+identical(sort(unique(dat.20.aj.site$Site.ID)), sort(unique(dat.19.aj.site$Site.ID)))
+#They are, but the # of obs is different - there must be some sites that have more measurements in one year than another, but that's fine because we're going to average
+
+#Look at a summary for 2.5 concentration
+summary(dat.20.aj.site$Daily.Mean.PM2.5.Concentration)
+summary(dat.19.aj.site$Daily.Mean.PM2.5.Concentration)
+
+#Remove negative values
+dat.20.aj.site <- dat.20.aj.site[dat.20.aj.site$Daily.Mean.PM2.5.Concentration >= 0, ]
+dat.19.aj.site <- dat.19.aj.site[dat.19.aj.site$Daily.Mean.PM2.5.Concentration >= 0, ]
+
+#Make sure each site has at least 10 measurements
+length(dat.20.aj.site$Daily.Mean.PM2.5.Concentration[is.na(dat.20.aj.site$Daily.Mean.PM2.5.Concentration)])
+tapply(dat.20.aj.site$Daily.Mean.PM2.5.Concentration, dat.20.aj.site$Site.ID, length)[tapply(dat.20.aj.site$Daily.Mean.PM2.5.Concentration, dat.20.aj.site$Site.ID, length) < 10]
+tapply(dat.19.aj.site$Daily.Mean.PM2.5.Concentration, dat.19.aj.site$Site.ID, length)[tapply(dat.19.aj.site$Daily.Mean.PM2.5.Concentration, dat.19.aj.site$Site.ID, length) < 10]
+```
+
+Grab the first row for each site in each dataset and create new dataframes to hold the mean data
+```{r}
+by.site.20 <- as.data.frame(matrix(nrow = length(unique(dat.20.aj.site$Site.ID)), ncol=ncol(dat.20.aj.site), data=NA))
+for (i in 1:length(unique(dat.20.aj.site$Site.ID))) {
+  by.site.20[i,] <- dat.20.aj.site[dat.20.aj.site$Site.ID == unique(dat.20.aj.site$Site.ID)[i], ][1,]
+}
+colnames(by.site.20) <- colnames(dat.20.aj.site)
+
+by.site.19 <- as.data.frame(matrix(nrow = length(unique(dat.19.aj.site$Site.ID)), ncol=ncol(dat.19.aj.site), data=NA))
+for (i in 1:length(unique(dat.19.aj.site$Site.ID))) {
+  by.site.19[i,] <- dat.19.aj.site[dat.19.aj.site$Site.ID == unique(dat.19.aj.site$Site.ID)[i], ][1,]
+}
+colnames(by.site.19) <- colnames(dat.19.aj.site)
+
+#Remove old PM2.5 measurement column
+by.site.20 <- subset(by.site.20, select = -c(Daily.Mean.PM2.5.Concentration))
+by.site.19 <- subset(by.site.19, select = -c(Daily.Mean.PM2.5.Concentration))
+```
+
+Loop over each station and calculate the mean across all dates for that station for each year
+```{r}
+by.site.20$pm <- sapply(unique(dat.20.aj.site$Site.ID), FUN = function(x) mean(dat.20.aj.site$Daily.Mean.PM2.5.Concentration[dat.20.aj.site$Site.ID == x]))
+by.site.19$pm <- sapply(unique(dat.19.aj.site$Site.ID), FUN = function(x) mean(dat.19.aj.site$Daily.Mean.PM2.5.Concentration[dat.19.aj.site$Site.ID == x]))
+```
+
+Loop over the stations and calculate the difference in means
+```{r}
+by.site.final <- by.site.20
+by.site.final$pm.diff <- sapply(unique(by.site.20$Site.ID), FUN = function(x) by.site.20$pm[by.site.20$Site.ID == x] - by.site.19$pm[by.site.19$Site.ID == x])
+by.site.final <- subset(by.site.final, select = -c(pm))
+```
+
+Add a state column
+```{r}
+by.site.final$State <- NA
+by.site.final$State[by.site.final$STATE == "Florida"] <- "FL"
+by.site.final$State[by.site.final$STATE == "Georgia"] <- "GA"
+by.site.final$State[by.site.final$STATE == "North Carolina"] <- "NC"
+by.site.final$State[by.site.final$STATE == "South Carolina"] <- "SC"
+by.site.final$State[by.site.final$STATE == "Virginia"] <- "VA"
+```
+
+
+### Covariates
+
+#### Population Density
+
+Read in the 30 arc-second (0.0083 degrees) data
+```{r}
+fl.area <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/flarea10.asc")
+fl.house <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/flhh10.asc")
+fl.pop <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/flpop10.asc")
+ga.area <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/gaarea10.asc")
+ga.house <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/gahh10.asc")
+ga.pop <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/gapop10.asc")
+nc.area <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/ncarea10.asc")
+nc.house <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/nchh10.asc")
+nc.pop <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/ncpop10.asc")
+sc.area <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/scarea10.asc")
+sc.house <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/schh10.asc")
+sc.pop <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/scpop10.asc")
+va.area <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/vaarea10.asc")
+va.house <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/vahh10.asc")
+va.pop <- read.table("/Users/tschappe/Downloads/usgrid_data_2010/dat/vapop10.asc")
+```
+
+Replace missing value -99999 with 0. This is justified because some of the sensors on the coast will have the density overesimated because the NAs from the ocean don't count.
+```{r}
+fl.pop <- as.data.frame(t(apply(fl.pop, 1, FUN = function(x) as.vector(sapply(x, FUN = function(y) as.numeric(gsub('-9999', '0', y)))))))
+ga.pop <- as.data.frame(t(apply(ga.pop, 1, FUN = function(x) as.vector(sapply(x, FUN = function(y) as.numeric(gsub('-9999', '0', y)))))))
+nc.pop <- as.data.frame(t(apply(nc.pop, 1, FUN = function(x) as.vector(sapply(x, FUN = function(y) as.numeric(gsub('-9999', '0', y)))))))
+sc.pop <- as.data.frame(t(apply(sc.pop, 1, FUN = function(x) as.vector(sapply(x, FUN = function(y) as.numeric(gsub('-9999', '0', y)))))))
+va.pop <- as.data.frame(t(apply(va.pop, 1, FUN = function(x) as.vector(sapply(x, FUN = function(y) as.numeric(gsub('-9999', '0', y)))))))
+
+# for (i in 1:nrow(fl.area)) {
+#   fl.area[i, ][fl.area[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(fl.house)) {
+#   fl.house[i, ][fl.house[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(fl.pop)) {
+#   fl.pop[i, ][fl.pop[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(ga.area)) {
+#   ga.area[i, ][ga.area[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(ga.house)) {
+#   ga.house[i, ][ga.house[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(ga.pop)) {
+#   ga.pop[i, ][ga.pop[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(nc.area)) {
+#   nc.area[i, ][nc.area[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(nc.house)) {
+#   nc.house[i, ][nc.house[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(nc.pop)) {
+#   nc.pop[i, ][nc.pop[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(sc.area)) {
+#   sc.area[i, ][sc.area[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(sc.house)) {
+#   sc.house[i, ][sc.house[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(sc.pop)) {
+#   sc.pop[i, ][sc.pop[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(va.area)) {
+#   va.area[i, ][va.area[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(va.house)) {
+#   va.house[i, ][va.house[i, ] == -9999] <- 0
+# }
+# for (i in 1:nrow(va.pop)) {
+#   va.pop[i, ][va.pop[i, ] == -9999] <- 0
+# }
+# 
+# #Replace missing value -99999 with NA
+# for (i in 1:nrow(fl.area)) {
+#   fl.area[i, ][fl.area[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(fl.house)) {
+#   fl.house[i, ][fl.house[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(fl.pop)) {
+#   fl.pop[i, ][fl.pop[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(ga.area)) {
+#   ga.area[i, ][ga.area[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(ga.house)) {
+#   ga.house[i, ][ga.house[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(ga.pop)) {
+#   ga.pop[i, ][ga.pop[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(nc.area)) {
+#   nc.area[i, ][nc.area[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(nc.house)) {
+#   nc.house[i, ][nc.house[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(nc.pop)) {
+#   nc.pop[i, ][nc.pop[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(sc.area)) {
+#   sc.area[i, ][sc.area[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(sc.house)) {
+#   sc.house[i, ][sc.house[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(sc.pop)) {
+#   sc.pop[i, ][sc.pop[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(va.area)) {
+#   va.area[i, ][va.area[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(va.house)) {
+#   va.house[i, ][va.house[i, ] == -9999] <- NA
+# }
+# for (i in 1:nrow(va.pop)) {
+#   va.pop[i, ][va.pop[i, ] == -9999] <- NA
+# }
+
+# nc.pop.mat <- ((as.matrix(nc.pop)))
+# sort(apply(nc.pop, 1, FUN = function(x) max(na.omit(x))))
+# 
+# fl.pop.mat <- ((as.matrix(fl.pop)))
+# sort(apply(fl.pop, 1, FUN = function(x) max(na.omit(x))))
+# sort(fl.pop.mat, decreasing = T)
+```
+
+By state, find the grid location for each monitoring site and grab its population density
+```{r}
+grid.inc <- 0.0083333333333333
+fl.start <- c(-87.641666666542, 24.516666666636)
+ga.start <- c(-85.608333333764, 30.350000000375)
+nc.start <- c(-84.324999999782, 33.833333333756)
+sc.start <- c(-83.358333333379, 32.033333333248)
+va.start <- c(-83.683333333791, 36.533333333018)
+states <- c("FL", "GA", "NC", "SC", "VA")
+starts <- as.matrix(cbind(rbind(fl.start, ga.start, nc.start, sc.start, va.start), as.integer(c(nrow(fl.pop), nrow(ga.pop), nrow(nc.pop), nrow(sc.pop), nrow(va.pop)))))
+starts.df <- as.data.frame(cbind(starts, states))
+colnames(starts.df) <- c("lon", "lat", "nrow", "state")
+#Add a state column to 
+
+#Loop over states and grab the proper indices within each state's grid for the target cell (the one where the station is located). Note that the coordinates of the cells are the lower left corner, so we use floor to round down to them.
+#What we do is for both longitide and latitude, we find the difference in degrees between the baseline cell of that state's grid (lower left) and the coordinates of the measurement station, then divide that difference by the size of each cell, to get number of cells from the grid baseline. We round down since the grid cells are referenced by lower lefthand corner. Do this for each state and combine them into a list of "target" grids for each state.
+cells <- list(NULL)
+for (i in 1:length(states)) {
+  cells[[i]] <- cbind(floor((by.site.final$SITE_LONGITUDE[by.site.final$State == states[i]] - starts[i,1])/grid.inc), floor((by.site.final$SITE_LATITUDE[by.site.final$State == states[i]] - starts[i,2])/grid.inc))
+}
+#Turn this into a dataframe
+cells.df <- as.data.frame(do.call('rbind', cells))
+#Add a state column
+cells.df$state <- by.site.final$State
+#Make list of the raw grid data for the states
+grids <- list(
+  fl.pop, ga.pop, nc.pop, sc.pop, va.pop
+)
+#Give the grid list items the names of the states so we can grab them by name
+names(grids) <- states
+
+#Loop over the desired grid cells, find all cells within 10 cells of the target cell (a square with sides of 630 arc seconds, or 0.175 arc degree, or about 10.5 miles centered on the target grid; or roughly a circle with radius 5.5 miles around the station)
+cell.feather <- 100
+for (i in 1:nrow(cells.df)) { #Loop over the rows of the cell indices desired
+  by.site.final$pop.dens[i] <- 
+    mean(
+      as.matrix(
+        #Subset the grid list to get the proper state's grid
+        grids[[names(grids)[names(grids) == cells.df$state[i]]]] 
+          #Subset the rows of the grid based on the cell number found in the cells.df column, and keep in mind that we have to work backwards for the rows because the cells start in the bottom left for the grid, so subract the desired cell row from the number of total cells.
+          #When you jitter by 10 cells, account for the fact that we may be less than 10 cells away from the edge of the grid, so take the min of 10 or the difference between the current row and the total number of rows. This is the lower bound for the rows, so subtract 10 (or min)
+          [(as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i] - min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i])) 
+            #This is the upper bound for the rows, so add 10 (or min)
+            :(as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i] + min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i])), 
+            #The columns are easier because the indices are in the same order as the grid, so we just need to subtract the lower and upper bound as 10 or min.
+            (cells.df$V1[i] - min(cell.feather, cells.df$V1[i], ncol(grids[[names(grids)[names(grids) == cells.df$state[i]]]]) - cells.df$V1[i]))
+            :(cells.df$V1[i] + min(cell.feather, cells.df$V1[i], ncol(grids[[names(grids)[names(grids) == cells.df$state[i]]]]) - cells.df$V1[i]))] 
+      ), #Return a matrix 
+    na.rm = T) #Find the mean of all of the cells, excluding NAs
+}
+
+
+
+###############3
+#Below was the test code to get the above loop to work on the first observation in the by.sites.final dataset from FL
+##############3
+# 
+# cells.test <- list(NULL)
+# for (i in 1:nrow(cells.df)) { #Loop over the rows of the cell indices desired
+#   cells.test[[i]] <- 
+#       as.matrix(
+#         #Subset the grid list to get the proper state's grid
+#         grids[[names(grids)[names(grids) == cells.df$state[i]]]] 
+#           #Subset the rows of the grid based on the cell number found in the cells.df column, and keep in mind that we have to work backwards for the rows because the cells start in the bottom left for the grid, so subract the desired cell row from the number of total cells.
+#           #When you jitter by 10 cells, account for the fact that we may be less than 10 cells away from the edge of the grid, so take the min of 10 or the difference between the current row and the total number of rows. This is the lower bound for the rows, so subtract 10 (or min)
+#           [(as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i] - min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i])) 
+#             #This is the upper bound for the rows, so add 10 (or min)
+#             :(as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i] + min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.df$state[i]]) - cells.df$V2[i])), 
+#             (cells.df$V1[i] - min(cell.feather, cells.df$V1[i], ncol(grids[[names(grids)[names(grids) == cells.df$state[i]]]]) - cells.df$V1[i]))
+#             :(cells.df$V1[i] + min(cell.feather, cells.df$V1[i], ncol(grids[[names(grids)[names(grids) == cells.df$state[i]]]]) - cells.df$V1[i]))] #The columns are easier because the indices are in the same order as the grid, so we just need to subtract the lower and upper bound as 10 or min.
+#       ) #Return a matrix 
+# }
+# 
+# ct1 <- cells.test[[2]]
+# 
+# apply(cells.df, 1, mean(fl.pop.mat[(779 - 605 - 10):(779 - 605 + 10), (-10 + 645):(10 + 645)], na.rm = T))
+# 
+# c(fl.start[1] + grid.inc*646, fl.start[2] + grid.inc*606)
+# fl.area[(-20 + 645):(20 + 645), (779 - 20 + 605):(779 + 20 + 605)]
+# mean(fl.pop.mat[(779 - 605 - 10):(779 - 605 + 10), (-10 + 645):(10 + 645)], na.rm = T)
+# 
+# fl.start[2] + 779*grid.inc
+# fl.start[1] + 914*grid.inc
+```
+
+#### Socioeconomic vulnerability index
+
+```{r}
+svi <- read.csv("/Users/tschappe/Documents/NC\ State\ Classes/ST540/Final\ Project/SVI2018_US_COUNTY.csv")
+#Remove 'City' from county column
+svi$county <- gsub('\\sCity', '', svi$COUNTY)
+#Make state_county column
+svi$state_county <- paste(svi$ST_ABBR, svi$county, sep="_")
+```
+
+#### 2016 presidential election votes
+
+```{r}
+pres <- read.csv("/Users/tschappe/Documents/NC\ State\ Classes/ST540/Final\ Project/election-context-2018.csv")
+# pres <- read.csv("/Volumes/tschappe/Documents/NC\ State\ Classes/ST540/Final\ Project/election-context-2018.csv")
+#Calculate total votes for 2016 presidential election
+pres$votes <- pres$trump16 + pres$clinton16 + pres$otherpres16
+#Calculate percentage votes for Trump
+pres$trump.per <- pres$trump16/pres$votes
+#Get state abbreviations in from a key file
+state.abb <- read.csv("/Users/tschappe/Documents/NC\ State\ Classes/ST540/Final\ Project/state_abb_key.csv")
+# state.abb <- read.csv("/Volumes/tschappe/Documents/NC\ State\ Classes/ST540/Final\ Project/state_abb_key.csv")
+#Make a new column with state abbreviations
+state.abb$State <- as.character(state.abb$State)
+state.abb$State <- gsub('^\\s', '', state.abb$State)
+state.abb$Abb <- as.character(state.abb$Abb)
+#Loop through and grab the abbreviation for each state
+pres$state_abb <- 1:nrow(pres)
+for (i in 1:nrow(pres)) {
+  pres$state_abb[i] <- (state.abb$Abb[state.abb$State == pres$state[i]])
+}
+#Make state_county column
+pres$state_county <- paste(pres$state_abb, pres$county, sep="_")
+```
+
+### Gather data together
+
+Make a State_County column for the pollution data
+```{r}
+by.site.final$state_county <- paste0(by.site.final$State, "_", by.site.final$COUNTY)
+#Remove any " City" from state_county
+by.site.final$state_county <- gsub(' City', '', by.site.final$state_county)
+
+```
+
+Get SVI for each site
+```{r}
+#Remove troublesome counties in VA with " City" versions
+svi2 <- svi
+svi2 <- svi2[!(rownames(svi2) %in% c("2069", "2694", "2444")),]
+
+# svi[svi$state_county == by.site.final$state_county[i],]
+
+for (i in 1:nrow(by.site.final)) {
+  by.site.final$svi[i] <- svi2$SPL_THEME1[svi2$state_county == by.site.final$state_county[i]]
+}
+```
+
+Get 2016 pres election for each site
+```{r}
+#Remove troublesome counties in VA with " City" versions
+pres2 <- pres
+pres2 <- pres2[!(rownames(pres2) %in% c("2897", "2868", "2867")),]
+
+# pres[grep("Charles", pres$county),]
+# pres$county
+# pres[pres$state_county == by.site.final$state_county[i],]
+
+#Charles City county in VA
+pres2$state_county[pres2$state_county == "VA_Charles City"] <- "VA_Charles"
+
+by.site.final$trump.per <- NULL
+for (i in 1:nrow(by.site.final)) {
+  by.site.final$trump.per[i] <- pres2$trump.per[pres2$state_county == by.site.final$state_county[i]]
+}
+```
+
+
+### Plot Response and Predictor
+
+```{r}
+qplot(pop.dens, pm.diff, data=by.site.final)+geom_smooth(method="lm")
+qplot(pop.dens, pm.diff, data=by.site.final, color=State)+geom_smooth(method="lm")
+
+qplot(svi, pm.diff, data=by.site.final)+geom_smooth(method="lm")
+qplot(svi, pm.diff, data=by.site.final, color=State)+geom_smooth(method="lm")
+
+qplot(trump.per, pm.diff, data=by.site.final)+geom_smooth(method="lm")
+qplot(trump.per, pm.diff, data=by.site.final, color=State)+geom_smooth(method="lm")
+```
+
+### Make a plot of the difference across the southeast US
+
+```{r}
+#Make the plot
+theme_set(theme_bw())
+
+#Make base map
+world <- ne_countries(scale="medium", returnclass = "sf")
+states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+states <- cbind(states, st_coordinates(st_centroid(states)))
+
+(diff.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states, fill="white")+
+    geom_point(data=by.site.final, aes(x=SITE_LONGITUDE, y=SITE_LATITUDE, fill=(pm.diff)), size=2.5, pch=21)+
+    scale_fill_gradient2(midpoint=0, mid="white", high="red", low="#0066ff", name="Difference in\nPM 2.5")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    ggtitle("Difference in Mean PM 2.5 from\nApril 1 to June 30 Between 2020 and 2019\nin FL, GA, NC, SC, and VA")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+```
+
+### Predictor Model Selection
+
+```{r}
+ols1 <- lm(pm.diff ~ pop.dens + trump.per + svi, data=by.site.final)
+ols2 <- lm(pm.diff ~ pop.dens*State + trump.per + svi, data=by.site.final)
+ols3 <- lm(pm.diff ~ pop.dens*State + trump.per*State + svi, data=by.site.final)
+ols4 <- lm(pm.diff ~ pop.dens*State + trump.per + svi*State, data=by.site.final)
+ols5 <- lm(pm.diff ~ pop.dens*State + trump.per*State + svi*State, data=by.site.final)
+AIC(ols1, ols2, ols3, ols4, ols5)
+anova(ols1, ols2, ols3, ols4, ols5)
+
+ols2.residuals <- residuals(ols2)
+```
+
+pop.dens*State + trump.per + svi is best model
+
+### OLS Model and Variogram
+
+Fit OLS and look at variogram
+```{r}
+L <- 50
+d_max <- 2
+d <- seq(0,d_max,length=L)
+vg <- variog(coords=subset(by.site.final, select=c(SITE_LATITUDE, SITE_LONGITUDE)), data=ols2.residuals, uvec=d)
+plot(vg)
+```
+
+Check for non-stationarity
+
+```{r}
+L <- 50
+d_max <- 4
+d <- seq(0,d_max,length=L)
+
+vg.by.state <- lapply(unique(by.site.final$State), FUN = function(x) variog(coords=by.site.final[by.site.final$State == x, colnames(by.site.final) %in% c("SITE_LONGITUDE", "SITE_LATITUDE")], data=ols2.residuals[by.site.final$State == x], uvec=d))
+for (i in 1:length(unique(by.site.final$State))) {
+  vg.by.state[[i]]$uvec <- unique(by.site.final$State)[i]
+}
+
+pdf("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/variogram_states.pdf", width=10, height=6)
+par(mfrow=c(2,3))
+lapply(vg.by.state, FUN = function(x) plot(x, main=x$uvec, ylim=c(0,2)))
+dev.off()
+```
+
+Some evidence of non-stationarity by state here. It looks like there are different nuggets, phis, and sigma^2 for each state. Try to fit a model with that.
+
+Check for anisotropy
+
+```{r}
+angles <- seq.default(from=0, to=pi, by=pi/6)
+vg.by.angle <- lapply(angles, FUN = function(x) variog(coords=by.site.final[colnames(by.site.final) %in% c("SITE_LONGITUDE", "SITE_LATITUDE")], data=ols2.residuals, uvec=d, direction=x))
+
+pdf("/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/variogram_degrees.pdf", width=10, height=6)
+par(mfrow=c(2,4))
+lapply(vg.by.angle, FUN = function(x) plot(x, main=paste(round(x$direction*180/pi,1), " degrees"), ylim=c(0,2)))
+dev.off()
+```
+
+Anisotropy assumption seems to be met -- the variograms don't differ much systematically, ignoring the differences in noise. 
+
+### Fit MLE Models
+
+Exponential correlation, with nugget and anisotropy
+```{r}
+#Scale continuous variables
+by.site.final$pop.dens.scale <- scale(by.site.final$pop.dens, scale=T, center=T)
+by.site.final$trump.per.scale <- scale(by.site.final$trump.per, scale=T, center=T)
+by.site.final$svi.scale <- scale(by.site.final$svi, scale=T, center=T)
+
+#Make a geodata object
+by.site.final.geodat <- as.geodata(by.site.final, coords.col = 18:19, data.col = 22, covar.col = c(23,28:30), covar.names = c("State", "pop.dens.scale", "trump.per.scale", "svi.scale"))
+
+#Initial parameters
+init_tau2 <- 0.02
+init_sig2 <- 0.5
+init_phi <- 0.2
+init_kappa <- 1.2
+init_psiA <- 70/180*pi
+init_psiR <- 1.1
+
+#
+(sp.fit.exp.nug.aniso <- likfit(geodata=by.site.final.geodat,
+                      trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                      fix.nugget=FALSE, nugget=init_tau2,
+                      fix.psiA = FALSE,
+                      psiA = init_psiA,
+                      fix.psiR = FALSE,
+                      psiR = init_psiR,
+                      cov.model="exponential",
+                      ini = c(init_sig2, init_phi)))
+
+(sp.fit.exp.nug <- likfit(geodata=by.site.final.geodat,
+                      trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                      fix.nugget=FALSE, nugget=init_tau2,
+                      cov.model="exponential",
+                      ini = c(init_sig2, init_phi)))
+```
+
+Exponential correlation, without nugget
+```{r}
+(sp.fit.exp.nonug <- likfit(geodata=by.site.final.geodat,
+                            trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                            fix.nugget=TRUE, nugget=0,
+                            cov.model="exponential",
+                            ini = c(init_sig2, init_phi)))
+
+(sp.fit.exp.nonug.aniso <- likfit(geodata=by.site.final.geodat,
+                            trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                            fix.nugget=TRUE, nugget=0,
+                            fix.psiA = FALSE,
+                            psiA = init_psiA,
+                            fix.psiR = FALSE,
+                            psiR = init_psiR,
+                            cov.model="exponential",
+                            ini = c(init_sig2, init_phi)))
+
+```
+
+Matern correlation, with nugget
+```{r}
+(sp.fit.matern.nug <- likfit(geodata=by.site.final.geodat,
+                             trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                            fix.nugget=FALSE, nugget=init_tau2,
+                            fix.kappa=FALSE, kappa = init_kappa,
+                            cov.model="matern",
+                            ini = c(init_sig2, init_phi)))
+
+(sp.fit.matern.nug.aniso <- likfit(geodata=by.site.final.geodat,
+                             trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                            fix.nugget=FALSE, nugget=init_tau2,
+                            fix.kappa=FALSE, kappa = init_kappa,
+                            fix.psiA = FALSE,
+                            psiA = init_psiA,
+                            fix.psiR = FALSE,
+                            psiR = init_psiR,
+                            cov.model="matern",
+                            ini = c(init_sig2, init_phi)))
+```
+
+Matern correlation, without nugget
+```{r}
+(sp.fit.matern.nonug <- likfit(geodata=by.site.final.geodat,
+                                trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                                fix.nugget=TRUE, nugget=0,
+                                fix.kappa=FALSE, kappa = init_kappa,
+                                cov.model="matern",
+                                ini = c(init_sig2, init_phi)))
+
+(sp.fit.matern.nonug.aniso <- likfit(geodata=by.site.final.geodat,
+                                trend= ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                                fix.nugget=TRUE, nugget=0,
+                                fix.kappa=FALSE, kappa = init_kappa,
+                                fix.psiA = FALSE,
+                                psiA = init_psiA,
+                                fix.psiR = FALSE,
+                                psiR = init_psiR,
+                                cov.model="matern",
+                                ini = c(init_sig2, init_phi)))
+```
+
+Compare models with AIC
+```{r}
+AIC(sp.fit.exp.nug, sp.fit.exp.nonug, sp.fit.matern.nug, sp.fit.matern.nonug, sp.fit.exp.nug.aniso, sp.fit.exp.nonug.aniso, sp.fit.matern.nug.aniso, sp.fit.matern.nonug.aniso)
+```
+
+It looks like the exponential model without a nugget term and with anisotropy is best supported.
+
+```{r}
+summary(sp.fit.exp.nonug.aniso)
+sp.fit.exp.nonug.aniso$cov.pars
+```
+
+### Set up Kriging prediction
+
+Make a grid of points in spatial range
+```{r}
+#Make predictions coordinates
+pred.coords <- data.frame(
+  x=seq.default(from=(min(by.site.final$SITE_LONGITUDE)), to=max(by.site.final$SITE_LONGITUDE), length.out = 100),
+  y=seq.default(from=(min(by.site.final$SITE_LATITUDE)), to=max(by.site.final$SITE_LATITUDE), length.out = 100)
+)
+#Make a grid
+pred.grid <- expand.grid(pred.coords)
+#Subset to only be inside US
+in.usa <- map.where(database = "usa", pred.grid[,1], pred.grid[,2])
+pred.grid.us <- pred.grid[!is.na(in.usa),]
+```
+
+Make a column for state that each point is in
+```{r}
+#Florida
+m.fl <- map("state", "florida", fill=T, plot=F, resolution = 0)
+in.fl <- map.where(database = m.fl, pred.grid.us[,1], pred.grid.us[,2])
+pred.grid.fl <- pred.grid.us[!is.na(in.fl),]
+pred.grid.fl$State <- "FL"
+#Georgia
+m.ga <- map("state", "georgia", fill=T, plot=F, resolution = 0)
+in.ga <- map.where(database = m.ga, pred.grid.us[,1], pred.grid.us[,2])
+pred.grid.ga <- pred.grid.us[!is.na(in.ga),]
+pred.grid.ga$State <- "GA"
+#North Carolina
+m.nc <- map("state", "north carolina", fill=T, plot=F, resolution = 0)
+in.nc <- map.where(database = m.nc, pred.grid.us[,1], pred.grid.us[,2])
+pred.grid.nc <- pred.grid.us[!is.na(in.nc),]
+pred.grid.nc$State <- "NC"
+#South Carolina
+m.sc <- map("state", "south carolina", fill=T, plot=F, resolution = 0)
+in.sc <- map.where(database = m.sc, pred.grid.us[,1], pred.grid.us[,2])
+pred.grid.sc <- pred.grid.us[!is.na(in.sc),]
+pred.grid.sc$State <- "SC"
+#Virginia
+m.va <- map("state", "virginia", fill=T, plot=F, resolution = 0)
+in.va <- map.where(database = m.va, pred.grid.us[,1], pred.grid.us[,2])
+pred.grid.va <- pred.grid.us[!is.na(in.va),]
+pred.grid.va$State <- "VA"
+
+#Recombine into one dataframe
+pred.grid.us.st <- as.data.frame(
+  rbind(
+    pred.grid.fl,
+    pred.grid.ga,
+    pred.grid.nc,
+    pred.grid.sc,
+    pred.grid.va
+  )
+)
+```
+
+
+Grab population density at these points
+```{r}
+states <- c("FL", "GA", "NC", "SC", "VA")
+starts <- as.matrix(cbind(rbind(fl.start, ga.start, nc.start, sc.start, va.start), as.integer(c(nrow(fl.pop), nrow(ga.pop), nrow(nc.pop), nrow(sc.pop), nrow(va.pop)))))
+starts.df <- as.data.frame(cbind(starts, states))
+colnames(starts.df) <- c("lon", "lat", "nrow", "state")
+
+#Loop over states and grab the proper indices within each state's grid for the target cell (the one where the station is located). Note that the coordinates of the cells are the lower left corner, so we use floor to round down to them.
+#What we do is for both longitide and latitude, we find the difference in degrees between the baseline cell of that state's grid (lower left) and the coordinates of the measurement station, then divide that difference by the size of each cell, to get number of cells from the grid baseline. We round down since the grid cells are referenced by lower lefthand corner. Do this for each state and combine them into a list of "target" grids for each state.
+cells.pred <- list(NULL)
+for (i in 1:length(states)) {
+  cells.pred[[i]] <- cbind(floor((pred.grid.us.st$x[pred.grid.us.st$State == states[i]] - starts[i,1])/grid.inc), floor((pred.grid.us.st$y[pred.grid.us.st$State == states[i]] - starts[i,2])/grid.inc))
+}
+#Turn this into a dataframe
+cells.pred.df <- as.data.frame(do.call('rbind', cells.pred))
+#Add a state column
+cells.pred.df$state <- pred.grid.us.st$State
+#Make list of the raw grid data for the states
+grids.pred <- list(
+  fl.pop, ga.pop, nc.pop, sc.pop, va.pop
+)
+#Give the grid list items the names of the states so we can grab them by name
+names(grids.pred) <- states
+
+#Loop over the desired grid cells, find all cells within 10 cells of the target cell (a square with sides of 630 arc seconds, or 0.175 arc degree, or about 10.5 miles centered on the target grid; or roughly a circle with radius 5.5 miles around the station)
+pred.grid.us.st$pop.dens <- NULL
+cell.feather <- 100
+for (i in 1:nrow(cells.pred.df)) { #Loop over the rows of the cell indices desired
+  pred.grid.us.st$pop.dens[i] <- 
+    mean(
+      as.matrix(
+        #Subset the grid list to get the proper state's grid
+        grids.pred[[names(grids.pred)[names(grids.pred) == cells.pred.df$state[i]]]] 
+          #Subset the rows of the grid based on the cell number found in the cells.df column, and keep in mind that we have to work backwards for the rows because the cells start in the bottom left for the grid, so subract the desired cell row from the number of total cells.
+          #When you jitter by 10 cells, account for the fact that we may be less than 10 cells away from the edge of the grid, so take the min of 10 or the difference between the current row and the total number of rows. This is the lower bound for the rows, so subtract 10 (or min)
+          [(as.integer(starts.df$nrow[starts.df$state == cells.pred.df$state[i]]) - cells.pred.df$V2[i] - min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.pred.df$state[i]]) - cells.pred.df$V2[i])) 
+            #This is the upper bound for the rows, so add 10 (or min)
+            :(as.integer(starts.df$nrow[starts.df$state == cells.pred.df$state[i]]) - cells.pred.df$V2[i] + min(cell.feather, as.integer(starts.df$nrow[starts.df$state == cells.pred.df$state[i]]) - cells.pred.df$V2[i])), 
+            #The columns are easier because the indices are in the same order as the grid, so we just need to subtract the lower and upper bound as 10 or min.
+            (cells.pred.df$V1[i] - min(cell.feather, cells.pred.df$V1[i], ncol(grids.pred[[names(grids.pred)[names(grids.pred) == cells.pred.df$state[i]]]]) - cells.pred.df$V1[i]))
+            :(cells.pred.df$V1[i] + min(cell.feather, cells.pred.df$V1[i], ncol(grids.pred[[names(grids.pred)[names(grids.pred) == cells.pred.df$state[i]]]]) - cells.pred.df$V1[i]))] 
+      ), #Return a matrix 
+    na.rm = T) #Find the mean of all of the cells, excluding NAs
+}
+```
+
+Make a column for counties
+```{r}
+#Grab names of counties
+fl.counties <- map("county", "florida", fill=T, plot=F, resolution=0)
+fl.counties.uniq <- fl.counties$names
+ga.counties <- map("county", "georgia", fill=T, plot=F, resolution=0)
+ga.counties.uniq <- ga.counties$names
+nc.counties <- map("county", "north carolina", fill=T, plot=F, resolution=0)
+nc.counties.uniq <- nc.counties$names
+sc.counties <- map("county", "south carolina", fill=T, plot=F, resolution=0)
+sc.counties.uniq <- sc.counties$names
+va.counties <- map("county", "virginia", fill=T, plot=F, resolution=0)
+va.counties.uniq <- va.counties$names
+
+#Grab maps/coordinates for each county in each state into a list
+fl.counties.coords <- lapply(fl.counties.uniq, FUN = function(x) map("county", x, fill=T, plot=F, resolution = 0))
+ga.counties.coords <- lapply(ga.counties.uniq, FUN = function(x) map("county", x, fill=T, plot=F, resolution = 0))
+nc.counties.coords <- lapply(nc.counties.uniq, FUN = function(x) map("county", x, fill=T, plot=F, resolution = 0))
+sc.counties.coords <- lapply(sc.counties.uniq, FUN = function(x) map("county", x, fill=T, plot=F, resolution = 0))
+va.counties.coords <- lapply(va.counties.uniq, FUN = function(x) map("county", x, fill=T, plot=F, resolution = 0))
+
+#Name the list items for the county they belong to
+names(fl.counties.coords) <- fl.counties.uniq
+names(ga.counties.coords) <- ga.counties.uniq
+names(nc.counties.coords) <- nc.counties.uniq
+names(sc.counties.coords) <- sc.counties.uniq
+names(va.counties.coords) <- va.counties.uniq
+
+
+####Florida
+#Go through each state and loop over the counties and grab the county name that each point belongs to
+pred.grid.fl.county.list <- list(NULL)
+for (i in 1:length(names(fl.counties.coords))) {                                #Loop over the names of the list items of the counties.coords, which contains the coordinates for the ith county in the state
+  temp <- map.where(fl.counties.coords[[i]], pred.grid.fl$x, pred.grid.fl$y)    #Use map.where to get a subset of the prediction points in county i
+  if(nrow(pred.grid.fl[!is.na(temp),] > 0)) {                                   #If the subset has more than 0 rows, then put the subset as a list item into a new list
+    pred.grid.fl.county.list[[i]] <- pred.grid.fl[!is.na(temp),]    
+    pred.grid.fl.county.list[[i]]$county <- names(fl.counties.coords)[i]        #Name the new list item according to the county that the points came from
+  }
+}
+#Extract list into a dataframe
+pred.grid.fl.county <- do.call('rbind', pred.grid.fl.county.list)
+#Remove "state," and capitalize county name
+pred.grid.fl.county$county <- sapply(pred.grid.fl.county$county, FUN = function(x) paste0(toupper(strsplit(split = "", gsub('florida,', '', x))[[1]][1]), paste(as.vector(strsplit(split = "", gsub('florida,', '', x))[[1]][-c(1)]), collapse = "")))
+#Make state_county column
+pred.grid.fl.county$state_county <- paste(pred.grid.fl.county$State, pred.grid.fl.county$county, sep="_")
+
+####Georgia
+#Go through each state and loop over the counties and grab the county name that each point belongs to
+pred.grid.ga.county.list <- list(NULL)
+for (i in 1:length(names(ga.counties.coords))) {                                #Loop over the names of the list items of the counties.coords, which contains the coordinates for the ith county in the state
+  temp <- map.where(ga.counties.coords[[i]], pred.grid.ga$x, pred.grid.ga$y)    #Use map.where to get a subset of the prediction points in county i
+  if(nrow(pred.grid.ga[!is.na(temp),] > 0)) {                                   #If the subset has more than 0 rows, then put the subset as a list item into a new list
+    pred.grid.ga.county.list[[i]] <- pred.grid.ga[!is.na(temp),]    
+    pred.grid.ga.county.list[[i]]$county <- names(ga.counties.coords)[i]        #Name the new list item according to the county that the points came from
+  }
+}
+#Extract list into a dataframe
+pred.grid.ga.county <- do.call('rbind', pred.grid.ga.county.list)
+#Remove "state," and capitalize county name
+pred.grid.ga.county$county <- sapply(pred.grid.ga.county$county, FUN = function(x) paste0(toupper(strsplit(split = "", gsub('georgia,', '', x))[[1]][1]), paste(as.vector(strsplit(split = "", gsub('georgia,', '', x))[[1]][-c(1)]), collapse = "")))
+#Make state_county column
+pred.grid.ga.county$state_county <- paste(pred.grid.ga.county$State, pred.grid.ga.county$county, sep="_")
+
+####North Carolina
+#Go through each state and loop over the counties and grab the county name that each point belongs to
+pred.grid.nc.county.list <- list(NULL)
+for (i in 1:length(names(nc.counties.coords))) {                                #Loop over the names of the list items of the counties.coords, which contains the coordinates for the ith county in the state
+  temp <- map.where(nc.counties.coords[[i]], pred.grid.nc$x, pred.grid.nc$y)    #Use map.where to get a subset of the prediction points in county i
+  if(nrow(pred.grid.nc[!is.na(temp),] > 0)) {                                   #If the subset has more than 0 rows, then put the subset as a list item into a new list
+    pred.grid.nc.county.list[[i]] <- pred.grid.nc[!is.na(temp),]    
+    pred.grid.nc.county.list[[i]]$county <- names(nc.counties.coords)[i]        #Name the new list item according to the county that the points came from
+  }
+}
+#Extract list into a dataframe
+pred.grid.nc.county <- do.call('rbind', pred.grid.nc.county.list)
+#Remove "state," and capitalize county name
+pred.grid.nc.county$county <- sapply(pred.grid.nc.county$county, FUN = function(x) paste0(toupper(strsplit(split = "", gsub('north carolina,', '', x))[[1]][1]), paste(as.vector(strsplit(split = "", gsub('north carolina,', '', x))[[1]][-c(1)]), collapse = "")))
+#Make state_county column
+pred.grid.nc.county$state_county <- paste(pred.grid.nc.county$State, pred.grid.nc.county$county, sep="_")
+
+####South Carolina
+#Go through each state and loop over the counties and grab the county name that each point belongs to
+pred.grid.sc.county.list <- list(NULL)
+for (i in 1:length(names(sc.counties.coords))) {                                #Loop over the names of the list items of the counties.coords, which contains the coordinates for the ith county in the state
+  temp <- map.where(sc.counties.coords[[i]], pred.grid.sc$x, pred.grid.sc$y)    #Use map.where to get a subset of the prediction points in county i
+  if(nrow(pred.grid.sc[!is.na(temp),] > 0)) {                                   #If the subset has more than 0 rows, then put the subset as a list item into a new list
+    pred.grid.sc.county.list[[i]] <- pred.grid.sc[!is.na(temp),]    
+    pred.grid.sc.county.list[[i]]$county <- names(sc.counties.coords)[i]        #Name the new list item according to the county that the points came from
+  }
+}
+#Extract list into a dataframe
+pred.grid.sc.county <- do.call('rbind', pred.grid.sc.county.list)
+#Remove "state," and capitalize county name
+pred.grid.sc.county$county <- sapply(pred.grid.sc.county$county, FUN = function(x) paste0(toupper(strsplit(split = "", gsub('south carolina,', '', x))[[1]][1]), paste(as.vector(strsplit(split = "", gsub('south carolina,', '', x))[[1]][-c(1)]), collapse = "")))
+#Make state_county column
+pred.grid.sc.county$state_county <- paste(pred.grid.sc.county$State, pred.grid.sc.county$county, sep="_")
+
+####Virginia
+#Go through each state and loop over the counties and grab the county name that each point belongs to
+pred.grid.va.county.list <- list(NULL)
+for (i in 1:length(names(va.counties.coords))) {                                #Loop over the names of the list items of the counties.coords, which contains the coordinates for the ith county in the state
+  temp <- map.where(va.counties.coords[[i]], pred.grid.va$x, pred.grid.va$y)    #Use map.where to get a subset of the prediction points in county i
+  if(nrow(pred.grid.va[!is.na(temp),] > 0)) {                                   #If the subset has more than 0 rows, then put the subset as a list item into a new list
+    pred.grid.va.county.list[[i]] <- pred.grid.va[!is.na(temp),]    
+    pred.grid.va.county.list[[i]]$county <- names(va.counties.coords)[i]        #Name the new list item according to the county that the points came from
+  }
+}
+#Extract list into a dataframe
+pred.grid.va.county <- do.call('rbind', pred.grid.va.county.list)
+#Remove "state," and capitalize county name
+pred.grid.va.county$county <- sapply(pred.grid.va.county$county, FUN = function(x) paste0(toupper(strsplit(split = "", gsub('virginia,', '', x))[[1]][1]), paste(as.vector(strsplit(split = "", gsub('virginia,', '', x))[[1]][-c(1)]), collapse = "")))
+#Make state_county column
+pred.grid.va.county$state_county <- paste(pred.grid.va.county$State, pred.grid.va.county$county, sep="_")
+
+###Combine them into one df
+pred.grid.counties <- rbind(pred.grid.fl.county, pred.grid.ga.county, pred.grid.nc.county, pred.grid.sc.county, pred.grid.va.county)
+pred.grid.final <- merge(pred.grid.counties, pred.grid.us.st, by=c("x", "y"), all.x=F, all.y=F, no.dups=T)
+
+#Remove weird :main and other things from county name
+pred.grid.final$state_county <- gsub('\\:main', '', pred.grid.final$state_county)
+
+#Capitalize second word in each name with a space
+simpleCap <- function(x) {
+  s <- strsplit(x, " ")[[1]]
+  paste(toupper(substring(s, 1,1)), substring(s, 2),
+      sep="", collapse=" ")
+}
+
+pred.grid.final$state_county[grep(" ", pred.grid.final$state_county)] <- as.character(sapply(pred.grid.final$state_county[grep(" ", pred.grid.final$state_county)], simpleCap))
+
+#Make 'Of' into 'of' and 'And' into 'and'
+pred.grid.final$state_county <- gsub('And', 'and', gsub('Of', 'of', pred.grid.final$state_county))
+#Make James City into James
+pred.grid.final$state_county <- gsub('De Kalb', 'DeKalb', gsub('De Soto', 'DeSoto', gsub('Mcintosh', 'McIntosh', gsub('St ', 'St. ', gsub('Miami-dade', 'Miami-Dade', gsub('Charles City', 'Charles', gsub('James City', 'James', pred.grid.final$state_county)))))))
+
+```
+
+Add SVI data to pred.grid.final
+```{r}
+#In VA, there's Franklin City and Franklin listed as counties. Remove Franklin City for now
+svi3 <- svi2[svi2$COUNTY != "Franklin City",]
+
+# for (i in 1:nrow(pred.grid.final)) {
+#   pred.grid.final$svi[i] <- svi3$SPL_THEME1[tolower(svi3$state_county) == tolower(pred.grid.final$state_county)[i]]
+# }
+pred.grid.svi.list <- NULL
+pred.grid.svi.list <- as.numeric(as.character(sapply(pred.grid.final$state_county, FUN = function(x) svi3$SPL_THEME1[tolower(svi3$state_county) == tolower(x)])))
+pred.grid.final$svi <- pred.grid.svi.list
+```
+
+Add trump.per to pred.grid.final
+```{r}
+#In VA, there's Franklin City and Franklin listed as counties. Remove Franklin City for now
+pres3 <- pres2[!(pres2$fips %in% c(51620, 51515)),]
+#Make James City into James
+pres3$state_county <- gsub('James City', 'James', pres3$state_county)
+
+pred.grid.trump.per.list <- NULL
+pred.grid.trump.per.list <- as.numeric(as.character(sapply(pred.grid.final$state_county, FUN = function(x) pres3$trump.per[tolower(pres3$state_county) == tolower(x)])))
+pred.grid.final$trump.per <- pred.grid.trump.per.list
+# pred.grid.trump.per.list.length <- sapply(pred.grid.trump.per.list, length)
+# pred.grid.trump.per.list.length[pred.grid.trump.per.list.length < 1]
+```
+
+Make some final cleanups
+```{r}
+#Drop state.x and state.y
+pred.grid.final$State <- pred.grid.final$State.x
+pred.grid.final <- subset(pred.grid.final, select  = -c(State.x, State.y))
+
+#Scale continuous variables
+pred.grid.final$pop.dens.scale <- scale(pred.grid.final$pop.dens, scale=T, center=T)
+pred.grid.final$trump.per.scale <- scale(pred.grid.final$trump.per, scale=T, center=T)
+pred.grid.final$svi.scale <- scale(pred.grid.final$svi, scale=T, center=T)
+
+#Remove any Lat Lon combinations that are duplicated
+pred.grid.final <- pred.grid.final[-which(duplicated(paste(pred.grid.final$x, pred.grid.final$y, sep="_"))),]
+```
+
+Combine the prediction locations with site locations so we can get predictions at the sites as well
+```{r}
+by.site.final.coords <- by.site.final.geodat$coords
+pred.grid.final.coords <- cbind(pred.grid.final$y, pred.grid.final$x)
+colnames(by.site.final.coords) <- c("y", "x")
+
+all.locations <- rbind(
+  by.site.final.coords,
+  pred.grid.final.coords
+)
+
+#Remove rows 422, 423, 450, and 451 because too close to a station
+# all.locations <- all.locations[-c(445,446),]
+
+```
+
+Combine the prediction covariates with the site covariates so we can get predictions at both
+```{r}
+by.site.final.covariates <- subset(by.site.final, select = c(pop.dens.scale, trump.per.scale, svi.scale, State))
+pred.grid.final.covariates <- subset(pred.grid.final, select = c(pop.dens.scale, trump.per.scale, svi.scale, State))
+
+
+all.covariates <- rbind(
+  by.site.final.covariates,
+  pred.grid.final.covariates
+)
+
+#Remove rows 422, 423, 450, and 451 because too close to a station
+# all.covariates <- all.covariates[-c(445,446),]
+
+
+```
+
+Try to find prediction sites that are too close to each other
+
+```{r}
+# all.loc.dist <- as.matrix(dist(all.locations, diag = T, upper = T))
+# diag(all.loc.dist) <- NA
+# all.loc.dist.lower <- all.loc.dist[lower.tri(all.loc.dist)]
+# 
+# zeros <- do.call('c', apply(all.loc.dist, 1, FUN = function(x) x[x < 0.2]))
+# zeros[!is.na(zeros)]
+# ?apply()
+# 
+# order(zeros, decreasing = T)
+# 
+# 
+# check.zero <- 1:nrow(all.loc.dist)
+# for (i in 1:nrow(all.loc.dist)) {
+#   check.zero[i] <- ifelse(length(which(all.loc.dist[i,] == 0)) > 0, which(all.loc.dist[i,] == 0), NA)
+# }
+# which(!is.na(check.zero))
+# 
+# 
+# pred.grid.final.dist <- as.matrix(dist(pred.grid.final.coords, diag=T, upper=T, method="euclidean"))
+# diag(pred.grid.final.dist) <- NA
+# 
+# check.zero <- 1:nrow(pred.grid.final.dist)
+# for (i in 1:nrow(pred.grid.final.dist)) {
+#   check.zero[i] <- ifelse(length(which(pred.grid.final.dist[i,] == 0)) > 0, which(pred.grid.final.dist[i,] == 0), NA)
+# }
+# which(!is.na(check.zero))
+# check.zero[!is.na(check.zero)]
+# check.zero[273]
+# 
+# pred.grid.final.dist[272:273,]
+# (pred.grid.final[272:273,])
+# 
+# pred.grid.test <- pred.grid.final[-272,]
+# pred.grid.test[271:273,]
+
+
+```
+
+
+
+### Fit Bayesian model with geoR using ansiotropy parameters above
+
+
+```{r}
+sp.fit.exp.nonug.aniso.bayes <- krige.bayes(geodata = by.site.final.geodat,
+                                    locations = all.locations,
+                                    model = model.control(
+                                      trend.d = ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale,
+                                      trend.l = ~ all.covariates$pop.dens.scale*all.covariates$State + all.covariates$trump.per.scale + all.covariates$svi.scale,
+                                      cov.model="exponential",
+                                      aniso.pars = sp.fit.exp.nonug.aniso$aniso.pars),
+                                    prior = prior.control(
+                                      beta.prior = "normal",
+                                      beta = rep(0,12),
+                                      beta.var.std = 10*diag(12),
+                                      sigmasq.prior = "sc.inv.chisq",
+                                      sigmasq = sp.fit.exp.nonug.aniso$cov.pars[1],
+                                      df.sigmasq = 2,
+                                      phi.prior = "squared.reciprocal",
+                                      # phi.discrete = seq.default(from=0,to=0.4,by=0.01),
+                                      # phi = sp.fit.exp.nonug.aniso$cov.pars[2],
+                                      tausq.rel.prior= "uniform",
+                                      tausq.rel.discrete = seq.default(from=0,to=10,by=0.2)
+                                      ),
+                                    output = output.control(
+                                      n.posterior = 10000,
+                                      mean.var = T,
+                                      sim.means = T,
+                                      sim.vars = T,
+                                      simulations.predictive = T)
+                                    )
+
+# save.image(file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/rdata/4000_preds.Rdata")
+```
+
+
+
+Extract the beta parameter summary
+```{r}
+bayes.beta.sum <- as.data.frame(sp.fit.exp.nonug.aniso.bayes$posterior$beta$summary)
+rownames(bayes.beta.sum) <- colnames(model.matrix(pm.diff ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale, data=by.site.final))
+```
+
+Extract the posterior samples and generate a figure
+```{r}
+#Extract posterior samples for all parameters
+sp.fit.exp.nonug.aniso.bayes.samp <- sp.fit.exp.nonug.aniso.bayes$posterior$sample
+colnames(sp.fit.exp.nonug.aniso.bayes.samp)[1:12] <- colnames(model.matrix(pm.diff ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale, data=by.site.final))
+#Melt the data for ggplot
+sp.fit.exp.nonug.aniso.bayes.samp.melt <- melt(sp.fit.exp.nonug.aniso.bayes.samp)
+#Make a halfeye figure
+ggplot(sp.fit.exp.nonug.aniso.bayes.samp.melt, aes(x=value, y=variable))+
+  geom_halfeyeh()+
+  theme_bw()+
+  ylab("Parameter")
+
+#Make a halfeye figure for just betas
+sp.fit.exp.nonug.ansio.bayes.samp.betas <- sp.fit.exp.nonug.aniso.bayes$posterior$sample
+sp.fit.exp.nonug.ansio.bayes.samp.betas <- sp.fit.exp.nonug.ansio.bayes.samp.betas[,grep('beta', colnames(sp.fit.exp.nonug.ansio.bayes.samp.betas))]
+colnames(sp.fit.exp.nonug.ansio.bayes.samp.betas) <- colnames(model.matrix(pm.diff ~ pop.dens.scale*State + trump.per.scale + svi.scale - 1 - pop.dens.scale, data=by.site.final))
+#Melt the data for ggplot
+sp.fit.exp.nonug.ansio.bayes.samp.betas.melt <- melt(sp.fit.exp.nonug.ansio.bayes.samp.betas)
+#Make a halfeye figure
+ggplot(sp.fit.exp.nonug.ansio.bayes.samp.betas.melt, aes(x=value, y=variable))+
+  geom_halfeyeh()+
+  theme_bw()+
+  ylab("Parameter")+
+  xlab("Value")+
+  geom_vline(xintercept = 0)
+```
+
+Make HDIs for parameters
+```{r}
+apply(sp.fit.exp.nonug.aniso.bayes.samp, 2, FUN = function(x) hdi(x, credMass = 0.95))
+apply(sp.fit.exp.nonug.aniso.bayes.samp, 2, FUN = function(x) hdi(x, credMass = 0.8))
+
+beta.hdis.df <- as.data.frame(
+  rbind(
+    apply(sp.fit.exp.nonug.ansio.bayes.samp.betas, 2, FUN = function(x) hdi(x, credMass = 0.95)),
+    apply(sp.fit.exp.nonug.ansio.bayes.samp.betas, 2, FUN = function(x) hdi(x, credMass = 0.8))
+  )
+)
+write.csv(beta.hdis.df, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/betas.hdis_4000.csv")
+```
+
+### Make predictions, prediction SEs, and HDIs
+
+```{r}
+#Get all mean predictions
+mean.sim.pred <- sp.fit.exp.nonug.aniso.bayes$predictive$mean.simulations
+mean.pred <- sp.fit.exp.nonug.aniso.bayes$predictive$mean
+#Put the proper values into the original dataframes
+by.site.final$mean.sim.pred <- mean.sim.pred[1:nrow(by.site.final)]
+by.site.final$mean.pred <- mean.pred[1:nrow(by.site.final)]
+pred.grid.final$mean.sim.pred <- mean.sim.pred[(nrow(by.site.final)+1):length(mean.sim.pred)]
+pred.grid.final$mean.pred <- mean.pred[(nrow(by.site.final)+1):length(mean.sim.pred)]
+
+#Get all SE of predictions
+se.pred <- sqrt(sp.fit.exp.nonug.aniso.bayes$predictive$variance)
+se.sim.pred <- sqrt(sp.fit.exp.nonug.aniso.bayes$predictive$variance.simulations)
+#Put the proper values into the original dataframes
+by.site.final$se.sim.pred <- se.sim.pred[1:nrow(by.site.final)]
+by.site.final$se.pred <- se.pred[1:nrow(by.site.final)]
+pred.grid.final$se.sim.pred <- se.sim.pred[(nrow(by.site.final)+1):length(se.sim.pred)]
+pred.grid.final$se.pred <- se.pred[(nrow(by.site.final)+1):length(se.sim.pred)]
+
+
+```
+
+### Make prediciton map
+
+```{r}
+#Make the plot
+theme_set(theme_bw())
+
+#Make base map
+world <- ne_countries(scale="medium", returnclass = "sf")
+states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+states <- cbind(states, st_coordinates(st_centroid(states)))
+
+(prediction.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+    # geom_point(data=pred.grid.final, aes(x=x, y=y, color=(mean.pred)), size=1.2, pch=15)+
+    geom_raster(data=pred.grid.final, aes(x=x, y=y,fill=mean.sim.pred))+
+    # scale_fill_gradient2(midpoint=0, mid="white", high="red", low="#0066ff", name="Predicted diff.\nin PM2.5")+
+    scale_fill_gradientn(colours = viridis(10), name="Predicted diff.\nin PM 2.5")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Bayesian Kriging Predictions of Difference in PM 2.5\nBetween 2020 and 2019")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(prediction.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/predicton_map4000.pdf", width=5, height=5)
+```
+
+### Make map of prediction SEs
+
+```{r}
+(prediction.se.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+    # geom_point(data=pred.grid.final, aes(x=x, y=y, color=(se.sim.pred)), size=1.5, pch=22)+
+    # scale_color_gradient(high="red", low="white", name="SE of predicted\ndiff. in PM2.5")+
+    geom_raster(data=pred.grid.final, aes(x=x, y=y,fill=se.sim.pred))+
+    scale_fill_gradientn(colours = viridis(10), name="Standard Error")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Standard Errors of Bayesian Kriging Predictions\nof Diff. in PM2.5 Between 2020 and 2019")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(prediction.se.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/predictonSE_map4000.pdf", width=5, height=5)
+```
+
+
+### Make map of estimated values at sites
+
+```{r}
+(sites.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+     geom_point(data=by.site.final, aes(x=SITE_LONGITUDE, y=SITE_LATITUDE, fill=(mean.pred)), size=2.5, pch=21)+
+    scale_fill_gradientn(colours=viridis(10), name="Estimated diff\nin PM2.5")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Estimated Difference in Mean PM 2.5 from\nApril 1 to June 30 Between 2020 and 2019\nin FL, GA, NC, SC, and VA")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(sites.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/sites.map_4000.pdf", width=5, height=5)
+```
+
+### Make map of SE at sites
+
+```{r}
+(sites.se.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+     geom_point(data=by.site.final, aes(x=SITE_LONGITUDE, y=SITE_LATITUDE, fill=(se.sim.pred)), size=2.5, pch=21)+
+    scale_fill_gradientn(colours=viridis(10), name="Standard Error")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Standard Error of Estimated Difference\nof Mean PM 2.5 from\nApril 1 to June 30 Between 2020 and 2019\nin FL, GA, NC, SC, and VA")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(sites.se.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/sites.se.map_4000.pdf", width=5, height=5)
+```
+
+### Make a map of prediction sites that have a significant difference from 0
+
+```{r}
+#Get simulations for HDI
+sims <- sp.fit.exp.nonug.aniso.bayes$predictive$simulations
+sims.hdis <- as.data.frame(t(apply(sims, 1, FUN = function(x) hdi(x, credMass = 0.8))))
+#Save to pred.grid.final
+pred.grid.final$lower.hdi <- sims.hdis[(nrow(by.site.final)+1):nrow(sims.hdis),1]
+pred.grid.final$upper.hdi <- sims.hdis[(nrow(by.site.final)+1):nrow(sims.hdis),2]
+#Find ones that don't include 0
+pred.grid.final.nonzero <- pred.grid.final[(pred.grid.final$lower.hdi < 0 & pred.grid.final$upper.hdi < 0) | (pred.grid.final$lower.hdi > 0 & pred.grid.final$upper.hdi > 0),]
+
+#Make the map
+(nonzero.prediction.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+    # geom_point(data=pred.grid.final, aes(x=x, y=y, color=(mean.pred)), size=1.2, pch=15)+
+    geom_tile(data=pred.grid.final.nonzero, aes(x=x, y=y,fill=mean.sim.pred))+
+    # scale_fill_gradient2(midpoint=0, mid="white", high="red", low="#0066ff", name="Predicted diff.\nin PM2.5")+
+    scale_fill_gradientn(colours = viridis(10), name="Predicted diff.\nin PM 2.5")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Bayesian Kriging Predictions of Difference in PM 2.5\nBetween 2020 and 2019\nWhere Difference is Non-Zero")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(nonzero.prediction.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/nonzero.predicton_map4000.pdf", width=5, height=5)
+```
+
+### Make a map of measurement sites that have a significant difference from 0
+
+```{r}
+#Get simulations for HDI
+sims <- sp.fit.exp.nonug.aniso.bayes$predictive$simulations
+sims.hdis <- as.data.frame(t(apply(sims, 1, FUN = function(x) hdi(x, credMass = 0.8))))
+#Save to pred.grid.final
+by.site.final$lower.hdi <- sims.hdis[1:nrow(by.site.final),1]
+by.site.final$upper.hdi <- sims.hdis[1:nrow(by.site.final),2]
+#Find ones that don't include 0
+by.site.final.nonzero <- by.site.final[(by.site.final$lower.hdi < 0 & by.site.final$upper.hdi < 0) | (by.site.final$lower.hdi > 0 & by.site.final$upper.hdi > 0),]
+
+#Make the map
+(nonzero.site.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data = states)+
+    geom_point(data=by.site.final.nonzero, aes(x=SITE_LONGITUDE, y=SITE_LATITUDE, fill=(mean.pred)), size=2.5, pch=21)+
+    scale_fill_gradientn(colours=viridis(10), name="Estimated diff\nin PM2.5")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Estimated Difference in PM 2.5\nBetween 2020 and 2019\nWhere Difference is Non-Zero")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(nonzero.site.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/nonzero.site_map4000.pdf", width=5, height=5)
+```
+
+Model assumptions:  Fitted vs residuals, qqnorm, variogram
+```{r}
+(fitted.residuals <- qplot(by.site.final$mean.sim.pred, by.site.final$mean.sim.pred - by.site.final$pm.diff)+xlab("Fitted values")+ylab("Residual values")+geom_hline(yintercept = 0))
+ggsave(fitted.residuals, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/fited.residuals.pdf", width=4, height=4)
+
+pdf(file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/qqplot.pdf", width=4,height=4)
+qqnorm(by.site.final$mean.sim.pred); qqline(by.site.final$mean.sim.pred)
+dev.off()
+
+
+plot_grid(plotlist=list(fitted.residuals, qqnorm(by.site.final$mean.sim.pred)), nrow=1, ncol=2, labels = c("a)", "b)"))
+
+L <- 80
+d_max <- 2
+d <- seq(0,d_max,length=L)
+vg <- variog(coords=subset(by.site.final, select=c(SITE_LATITUDE, SITE_LONGITUDE)), data=by.site.final$mean.sim.pred - by.site.final$pm.diff, uvec=d)
+
+pdf(file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/final.vario.pdf", width=4, height=4)
+final.vario <- plot(vg)
+dev.off()
+```
+
+Look at traceplots
+```{r}
+#Make iter column within each beta parameter
+sp.fit.exp.nonug.aniso.bayes.samp.melt$iter <- rep(1:10000, 15)
+traceplots <- qplot(iter, value, color=variable, geom="line", data=sp.fit.exp.nonug.aniso.bayes.samp.melt)+facet_wrap(~variable, ncol=5, scales = "free")+theme(legend.position = "none")+xlab("Iteration")+ylab("Posterior sample value")
+ggsave(traceplots, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/traceplots_4000.pdf", width=10, height=4)
+ggsave(traceplots, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/traceplots_4000.jpg", width=10, height=4)
+```
+
+Find distance between points on pred.grid
+```{r}
+pred.grid.final.sort <- pred.grid.final[order(pred.grid.final$x, pred.grid.final$y, decreasing = T),]
+pred.grid.final.sort.coords <- subset(pred.grid.final.sort, select = c(x, y))
+pred.grid.final.sort.dist <- as.matrix(dist(pred.grid.final.sort.coords, method="euclidean", diag = T, upper = T))
+```
+
+
+Save environment
+```{r}
+save.image(file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/rdata/4000.pred.final.Rdata")
+```
+
+Make a map of votes for Trump
+```{r}
+counties <- st_as_sf(map("county", plot = FALSE, fill = TRUE))
+counties <- cbind(counties, st_coordinates(st_centroid(counties)))
+
+#Make a state_county column
+counties$State <- toupper(gsub('\\,.+', '', counties$ID))
+counties$County <- toupper(gsub('^[A-Za-z ]+\\,', '', counties$ID))
+counties$state_county <- paste(counties$State, counties$County, sep="_")
+pres3$state_county2 <- paste(toupper(pres3$state), toupper(pres3$county), sep="_")
+trump.counties <- merge(counties, pres3, by.x="state_county", by.y="state_county2")
+trump.counties <- trump.counties[trump.counties$state %in% by.site.final$STATE ,]
+
+(trump.map <- 
+  ggplot(data = world)+
+    geom_sf() +
+    geom_sf(data=states) +
+    geom_sf(data = trump.counties, aes(fill=trump.per))+
+    # geom_point(data=by.site.final, aes(x=SITE_LONGITUDE, y=SITE_LATITUDE, fill=trump.per), size=2.5, pch=21)+
+    scale_fill_gradient2(midpoint = 0.5, mid = "white", low="blue", high="red", name="Proportion Vote for\nTrump in 2016")+
+    coord_sf(xlim = c(-88, -75), ylim = c(24, 40), expand = FALSE)+
+    xlab("Longitude")+
+    ylab("Latitude")+
+    # ggtitle("Estimated Difference in PM 2.5\nBetween 2020 and 2019\nWhere Difference is Non-Zero")+
+    theme(plot.title = element_text(hjust=0.5, face="bold")))
+ggsave(trump.map, file="/Volumes/\ macOS\ -\ Data/Users/tyler/Documents/Fall\ 2020/ST533/midterm1/figs/trump_map.pdf", width=5, height=5)
+```
+
+
+To Do:
+<!-- 1) Check assumptions of final model from MLE fit -->
+<!-- 2) Run Bayesian model again for final model -->
+3) Do Kriging from Bayesian model following his example
+4) Find SE for each location and determine which ones have CIs that do not include 0
+5) Make a map of Kriging predictions
+6) Make a map of Kriging SEs
+7) Make a map of sites that have significant differences in PM 2.5
